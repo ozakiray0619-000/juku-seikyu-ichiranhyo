@@ -111,9 +111,15 @@
     gap: 14px;
   }
   @media (max-width: 760px) { .features { grid-template-columns: 1fr; } }
-  .feature-card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; box-shadow: var(--shadow); }
+  .feature-card {
+    display: block; background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+    padding: 16px 18px; box-shadow: var(--shadow); text-decoration: none; color: inherit;
+    transition: transform 0.12s ease, border-color 0.12s ease;
+  }
+  .feature-card:hover { border-color: var(--accent); transform: translateY(-2px); }
   .feature-card h3 { margin: 0 0 6px; font-size: 0.95rem; color: var(--accent-strong); }
   .feature-card p { margin: 0; font-size: 0.85rem; color: var(--ink-dim); line-height: 1.6; }
+  .feature-card .cta-hint { display: block; margin-top: 10px; font-size: 0.78rem; font-weight: 600; color: var(--accent); }
 
   .search-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 2px; }
   .search-input {
@@ -205,18 +211,21 @@
   </div>
 
   <div class="features">
-    <div class="feature-card">
+    <a class="feature-card" href="一覧表.xlsx">
       <h3>📊 単価表と連動</h3>
-      <p>「単価表」シートでコースの単価・教材費を直せば、該当コース全員の請求額が自動で再計算される。</p>
-    </div>
-    <div class="feature-card">
+      <p>「単価表」でコースの単価・教材費を直せば、該当コース全員の請求額が自動で再計算される。</p>
+      <span class="cta-hint">📥 Excelを開いて見る →</span>
+    </a>
+    <a class="feature-card" href="一覧表.xlsx">
       <h3>🧾 個別請求書を自動生成</h3>
       <p>「請求書」シートでNoか生徒名を選ぶだけで、その生徒の請求内容が自動表示される。</p>
-    </div>
-    <div class="feature-card">
+      <span class="cta-hint">📥 Excelを開いて見る →</span>
+    </a>
+    <a class="feature-card" href="一覧表.xlsx">
       <h3>📧 Gmailでワンクリック送信</h3>
       <p>宛先・件名・本文が入力済みの状態でGmailの作成画面を開くリンク付き。設定不要。</p>
-    </div>
+      <span class="cta-hint">📥 Excelを開いて見る →</span>
+    </a>
   </div>
 
   <div class="search-bar">
