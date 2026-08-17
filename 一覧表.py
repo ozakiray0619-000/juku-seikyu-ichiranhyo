@@ -71,7 +71,9 @@ def make_unique_names(count):
     while len(names) < count:
         name = random.choice(SEI_LIST) + random.choice(MEI_LIST)
         names.add(name)
-    names = list(names)
+    # set→listの順序はPythonの文字列ハッシュのランダム化により実行ごとに変わる
+    # (random.seedでは制御できない)ため、まずsortedで固定順にしてからshuffleする。
+    names = sorted(names)
     random.shuffle(names)
     return names
 
@@ -118,6 +120,7 @@ MONEY_FORMAT = "#,##0"
 TABLE_NAME = "SeikyuData"
 TANKA_TABLE_NAME = "TankaData"
 JUKU_NAME = "さくら学習塾"
+SITE_URL = "https://ozakiray0619-000.github.io/juku-seikyu-ichiranhyo/"
 
 TOTAL_FILL = PatternFill(start_color="FFFFF2CC", end_color="FFFFF2CC", fill_type="solid")
 SUMMARY_FILL = PatternFill(start_color="FFD9E1F2", end_color="FFD9E1F2", fill_type="solid")
@@ -220,8 +223,6 @@ def build_workbook(students):
     wb.calculation = CalcProperties(fullCalcOnLoad=True)
     ws = wb.active
     ws.title = "月末請求一覧"
-
-    build_tanka_sheet(wb)
 
     n_students = len(students)
     header_row = 3
@@ -438,50 +439,65 @@ def build_workbook(students):
     # --- 見出し行を固定表示 ---
     ws.freeze_panes = f"A{data_start_row}"
 
-    build_invoice_sheet(wb, ws.title, data_start_row, data_end_row)
+    invoice_ws = build_invoice_sheet(wb, ws.title, data_start_row, data_end_row)
+
+    # 月末請求一覧シートは請求書シート・単価表シートの計算元データとして必要だが、
+    # 180行もあってタブを開いてもスクロールが大変なので、普段は非表示にしておく。
+    # データはそのまま残るので数式は問題なく動く（右クリック→再表示でいつでも見られる）。
+    ws.sheet_state = "hidden"
+    wb.active = wb.index(invoice_ws)
 
     return wb
 
 
-def build_tanka_sheet(wb):
-    """コース別の単価マスターシート。ここを直せば一覧表の該当コース全員に自動反映される。"""
-    ws = wb.create_sheet("単価表")
-    ws.sheet_view.showGridLines = False
+def build_tanka_sheet(ws, start_row, start_col):
+    """コース別の単価マスター表を、指定シートの指定位置に埋め込む。
 
-    ws.cell(row=1, column=1, value="コース別 単価マスター").font = Font(
-        bold=True, size=14, color="FF223757"
+    請求書シートの操作パネル内（印刷範囲の外）に置くことで、単価表を
+    別タブに分けずに1シートで完結させる。ここを直せば一覧表の該当コース
+    全員に自動反映される（TANKA_TABLE_NAME はシートをまたいで参照される
+    ため、物理的な置き場所はどこでも構わない）。
+    """
+    title_row = start_row
+    ws.cell(row=title_row, column=start_col, value="📋 コース別 単価マスター").font = Font(
+        bold=True, size=12, color="FF223757"
     )
+    ws.merge_cells(start_row=title_row, start_column=start_col, end_row=title_row, end_column=start_col + 2)
+
+    note_row = title_row + 1
     ws.cell(
-        row=2,
-        column=1,
+        row=note_row,
+        column=start_col,
         value="🟨 黄色いセル（1コマ単価・教材費）を直すと、一覧表の該当コースの生徒全員に自動反映されます。",
-    ).font = Font(size=10, color="FF5B6472")
-    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=3)
-    ws.row_dimensions[2].height = 18
+    ).font = Font(size=9, color="FF5B6472")
+    ws.cell(row=note_row, column=start_col).alignment = Alignment(wrap_text=True, vertical="top")
+    ws.merge_cells(start_row=note_row, start_column=start_col, end_row=note_row + 1, end_column=start_col + 2)
 
     tanka_headers = ["コース", "1コマ単価", "教材費(標準)"]
-    header_row = 4
-    for col, title in enumerate(tanka_headers, start=1):
-        ws.cell(row=header_row, column=col, value=title)
+    header_row = note_row + 2
+    for col_offset, title in enumerate(tanka_headers):
+        ws.cell(row=header_row, column=start_col + col_offset, value=title)
     add_note(
         ws,
-        f"B{header_row}",
+        f"{get_column_letter(start_col + 1)}{header_row}",
         "✏ ここが入力欄です。\n"
         "数字を書き換えると、一覧表の該当コースを選んでいる生徒全員の金額に自動で反映されます。",
     )
 
     for i, (course, unit_price, material_fee) in enumerate(COURSE_MASTER):
         row = header_row + 1 + i
-        ws.cell(row=row, column=1, value=course)
-        c_unit = ws.cell(row=row, column=2, value=unit_price)
-        c_material = ws.cell(row=row, column=3, value=material_fee)
+        ws.cell(row=row, column=start_col, value=course)
+        c_unit = ws.cell(row=row, column=start_col + 1, value=unit_price)
+        c_material = ws.cell(row=row, column=start_col + 2, value=material_fee)
         c_unit.number_format = MONEY_FORMAT
         c_material.number_format = MONEY_FORMAT
         c_unit.fill = INPUT_FILL
         c_material.fill = INPUT_FILL
 
     data_end_row = header_row + len(COURSE_MASTER)
-    table_ref = f"A{header_row}:C{data_end_row}"
+    start_col_letter = get_column_letter(start_col)
+    end_col_letter = get_column_letter(start_col + 2)
+    table_ref = f"{start_col_letter}{header_row}:{end_col_letter}{data_end_row}"
     table_columns = [
         TableColumn(id=idx, name=title) for idx, title in enumerate(tanka_headers, start=1)
     ]
@@ -496,8 +512,7 @@ def build_tanka_sheet(wb):
     )
     ws.add_table(tab)
 
-    for col, width in zip("ABC", (16, 14, 16)):
-        ws.column_dimensions[col].width = width
+    return data_end_row
 
 
 def build_invoice_sheet(wb, main_sheet_name, data_start_row, data_end_row):
@@ -644,6 +659,28 @@ def build_invoice_sheet(wb, main_sheet_name, data_start_row, data_end_row):
     test_link_cell.font = Font(bold=True, color="FF1155CC", underline="single")
     ws.merge_cells(start_row=3, start_column=PL, end_row=3, end_column=PV + 1)
 
+    # --- 全生徒を検索できるWebページへのリンク（月末請求一覧シートは非表示にしたため、
+    # 一覧をパッと確認したいときはこちらから） ---
+    SITE_COL = PV + 4  # N列
+    site_header = ws.cell(row=1, column=SITE_COL, value="🔍 生徒を探すときは")
+    site_header.font = Font(bold=True, size=10, color="FF5B6472")
+    ws.merge_cells(start_row=1, start_column=SITE_COL, end_row=1, end_column=SITE_COL + 2)
+
+    site_link_cell = ws.cell(row=2, column=SITE_COL, value="🔗 一覧をWebで検索して見る")
+    site_link_cell.hyperlink = SITE_URL
+    site_link_cell.font = Font(bold=True, size=12, color="FF1155CC", underline="single")
+    site_link_cell.fill = PatternFill(start_color="FFE2EFDA", end_color="FFE2EFDA", fill_type="solid")
+    ws.merge_cells(start_row=2, start_column=SITE_COL, end_row=2, end_column=SITE_COL + 2)
+
+    site_note_cell = ws.cell(
+        row=3,
+        column=SITE_COL,
+        value="生徒名やNoで検索、教室で絞り込みができます（ブラウザで開きます）。",
+    )
+    site_note_cell.font = Font(size=9, color="FF5B6472")
+    site_note_cell.alignment = Alignment(wrap_text=True, vertical="top")
+    ws.merge_cells(start_row=3, start_column=SITE_COL, end_row=4, end_column=SITE_COL + 2)
+
     # --- ① 生徒番号(No)で入力 ---
     ws.cell(row=4, column=PL, value="① 生徒番号(No)で入力 ▶").font = Font(bold=True)
     no_cell = ws.cell(row=4, column=PV, value=None)
@@ -783,13 +820,19 @@ def build_invoice_sheet(wb, main_sheet_name, data_start_row, data_end_row):
     body_cell.alignment = Alignment(wrap_text=True, vertical="top", horizontal="left")
     body_cell.border = BORDER
 
+    # --- 単価表（別タブに分けず、この操作パネルの下に埋め込む） ---
+    tanka_start_row = body_row + 18
+    build_tanka_sheet(ws, tanka_start_row, PV)
+
     # --- 列幅 ---
     widths = {
         "A": 20, "B": 3, "C": 14, "D": 14, "E": 14, "F": 14, "G": 4,
-        "H": 22, "I": 2, "J": 16, "K": 16, "L": 16,
+        "H": 22, "I": 2, "J": 16, "K": 16, "L": 16, "M": 3, "N": 20, "O": 12, "P": 12,
     }
     for col, width in widths.items():
         ws.column_dimensions[col].width = width
+
+    return ws
 
 
 def main():
