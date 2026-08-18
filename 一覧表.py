@@ -749,20 +749,37 @@ def build_invoice_sheet(wb, main_sheet_name, data_start_row, data_end_row):
     list_header.font = Font(bold=True, size=10, color="FF5B6472")
     ws.merge_cells(start_row=5, start_column=SITE_COL, end_row=5, end_column=SITE_COL + 2)
 
-    list_link_cell = ws.cell(row=6, column=SITE_COL, value="📋 一覧表を開く（週コマ数を編集）")
+    # クリック範囲を広く・分かりやすくするため、ボタン部分は2行ぶん確保して
+    # 枠線もつける（1行だけだと押し損ねやすいという報告があったため）。
+    list_link_cell = ws.cell(row=6, column=SITE_COL, value="📋 一覧表を開く\n（週コマ数を編集）")
     list_link_cell.hyperlink = f"#'{main_sheet_name}'!G{data_start_row}"
     list_link_cell.font = Font(bold=True, size=12, color="FF1155CC", underline="single")
     list_link_cell.fill = PatternFill(start_color="FFE2EFDA", end_color="FFE2EFDA", fill_type="solid")
-    ws.merge_cells(start_row=6, start_column=SITE_COL, end_row=6, end_column=SITE_COL + 2)
+    list_link_cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    button_border = Border(
+        left=Side(style="medium", color="FF2F7D68"),
+        right=Side(style="medium", color="FF2F7D68"),
+        top=Side(style="medium", color="FF2F7D68"),
+        bottom=Side(style="medium", color="FF2F7D68"),
+    )
+    for r in (6, 7):
+        for c in range(SITE_COL, SITE_COL + 3):
+            ws.cell(row=r, column=c).fill = PatternFill(
+                start_color="FFE2EFDA", end_color="FFE2EFDA", fill_type="solid"
+            )
+            ws.cell(row=r, column=c).border = button_border
+    ws.row_dimensions[6].height = 20
+    ws.row_dimensions[7].height = 20
+    ws.merge_cells(start_row=6, start_column=SITE_COL, end_row=7, end_column=SITE_COL + 2)
 
     list_note_cell = ws.cell(
-        row=7,
+        row=8,
         column=SITE_COL,
         value="「月末請求一覧」タブに切り替わります。黄色いセル（週コマ数）に数字を入力してください。",
     )
     list_note_cell.font = Font(size=9, color="FF5B6472")
     list_note_cell.alignment = Alignment(wrap_text=True, vertical="top")
-    ws.merge_cells(start_row=7, start_column=SITE_COL, end_row=8, end_column=SITE_COL + 2)
+    ws.merge_cells(start_row=8, start_column=SITE_COL, end_row=9, end_column=SITE_COL + 2)
 
     # --- ① 生徒番号(No)で入力 ---
     ws.cell(row=4, column=PL, value="① 生徒番号(No)で入力 ▶").font = Font(bold=True)
