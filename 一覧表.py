@@ -18,7 +18,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.workbook.properties import CalcProperties
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.filters import AutoFilter
-from openpyxl.worksheet.properties import Outline, PageSetupProperties
+from openpyxl.worksheet.properties import PageSetupProperties
 from openpyxl.worksheet.table import Table, TableColumn, TableStyleInfo
 
 random.seed(42)
@@ -271,8 +271,6 @@ def build_workbook(students):
             "　📧 「Gmailを開く」で宛先・件名・請求内容まで入力済みのGmailを開けます"
             "（この内容はファイルを作った時点の金額で固定。週コマ数を変えたら"
             "一覧表.pyを再実行して作り直してください）。"
-            "　🔽 180人分の行は普段は折りたたんであります。「合計」行の左にある［+］を"
-            "クリックすると展開して週コマ数を編集できます。"
         ),
     )
     guide_cell.font = Font(size=10, italic=True, color="FF5B6472")
@@ -465,17 +463,6 @@ def build_workbook(students):
         cell.fill = TOTAL_FILL
         cell.border = BORDER
 
-    # --- 180行のデータ行をグループ化して折りたたむ（Excelのアウトライン機能） ---
-    # タブを開いたときに180行がずらっと表示されると見づらいので、普段は折りたたんで
-    # おき、「合計」行の左の［+］をクリックしたときだけ展開して週コマ数を編集できる
-    # ようにする。以前は非表示にしていたが、それだと入力欄ごと迷子になったため、
-    # 「折りたたみ」なら見た目はすっきりしたまま、入力できる場所も分かりやすい。
-    ws.sheet_properties.outlinePr = Outline(summaryBelow=True, showOutlineSymbols=True)
-    for row in range(data_start_row, data_end_row + 1):
-        ws.row_dimensions[row].outlineLevel = 1
-        ws.row_dimensions[row].hidden = True
-    ws.row_dimensions[total_row].collapsed = True
-
     # --- 列幅 ---
     widths = [6, 14, 8, 6, 12, 11, 9, 8, 10, 12, 14, 22, 16, 62, 20]
     for col, width in enumerate(widths, start=1):
@@ -488,10 +475,10 @@ def build_workbook(students):
 
     # 月末請求一覧シートは請求書シート・単価表シートの計算元データであると同時に、
     # このツールで人が入力する唯一の値（週コマ数、黄色いセル）を触れる唯一の場所
-    # でもあるため、非表示にはしない（以前は180行のスクロールを嫌って非表示にして
-    # いたが、そうすると週コマ数の入力欄ごと迷子になってしまった）。代わりに180行は
-    # アウトライン機能で折りたたんでおき、開いたときの見た目はすっきりさせつつ、
-    # ワークブックを開いたときに最初に表示されるのは請求書シートにする。
+    # でもあるため、非表示にはしない（非表示にすると入力欄ごと迷子になる。
+    # アウトラインで折りたたむ案も試したが、折りたたみ自体が分かりにくいという
+    # フィードバックにより不採用）。ワークブックを開いたときに最初に表示されるのは
+    # 請求書シートにし、月末請求一覧へは請求書シートのボタンから移動する。
     wb.active = wb.index(invoice_ws)
 
     return wb
@@ -751,6 +738,31 @@ def build_invoice_sheet(wb, main_sheet_name, data_start_row, data_end_row):
     site_note_cell.font = Font(size=9, color="FF5B6472")
     site_note_cell.alignment = Alignment(wrap_text=True, vertical="top")
     ws.merge_cells(start_row=3, start_column=SITE_COL, end_row=4, end_column=SITE_COL + 2)
+
+    # --- 週コマ数を変更するときは、月末請求一覧シートへジャンプするボタン ---
+    # ワークブックを開くと請求書シートが最初に表示されるため、週コマ数の
+    # 入力場所（月末請求一覧シートのG列）まで自力でたどり着くのは分かりにくい。
+    # 内部ハイパーリンク（先頭に#を付けたシート名!セル）でそこへ直接ジャンプできる
+    # ボタンを置く。リンク先はG列の最初の入力セルにしておき、飛んだ瞬間から
+    # そのまま週コマ数を編集できるようにする。
+    list_header = ws.cell(row=5, column=SITE_COL, value="🔧 週コマ数を変えるときは")
+    list_header.font = Font(bold=True, size=10, color="FF5B6472")
+    ws.merge_cells(start_row=5, start_column=SITE_COL, end_row=5, end_column=SITE_COL + 2)
+
+    list_link_cell = ws.cell(row=6, column=SITE_COL, value="📋 一覧表を開く（週コマ数を編集）")
+    list_link_cell.hyperlink = f"#'{main_sheet_name}'!G{data_start_row}"
+    list_link_cell.font = Font(bold=True, size=12, color="FF1155CC", underline="single")
+    list_link_cell.fill = PatternFill(start_color="FFE2EFDA", end_color="FFE2EFDA", fill_type="solid")
+    ws.merge_cells(start_row=6, start_column=SITE_COL, end_row=6, end_column=SITE_COL + 2)
+
+    list_note_cell = ws.cell(
+        row=7,
+        column=SITE_COL,
+        value="「月末請求一覧」タブに切り替わります。黄色いセル（週コマ数）に数字を入力してください。",
+    )
+    list_note_cell.font = Font(size=9, color="FF5B6472")
+    list_note_cell.alignment = Alignment(wrap_text=True, vertical="top")
+    ws.merge_cells(start_row=7, start_column=SITE_COL, end_row=8, end_column=SITE_COL + 2)
 
     # --- ① 生徒番号(No)で入力 ---
     ws.cell(row=4, column=PL, value="① 生徒番号(No)で入力 ▶").font = Font(bold=True)
