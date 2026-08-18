@@ -18,7 +18,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.workbook.properties import CalcProperties
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.filters import AutoFilter
-from openpyxl.worksheet.properties import PageSetupProperties
+from openpyxl.worksheet.properties import Outline, PageSetupProperties
 from openpyxl.worksheet.table import Table, TableColumn, TableStyleInfo
 
 random.seed(42)
@@ -271,6 +271,8 @@ def build_workbook(students):
             "　📧 「Gmailを開く」で宛先・件名・請求内容まで入力済みのGmailを開けます"
             "（この内容はファイルを作った時点の金額で固定。週コマ数を変えたら"
             "一覧表.pyを再実行して作り直してください）。"
+            "　🔽 180人分の行は普段は折りたたんであります。「合計」行の左にある［+］を"
+            "クリックすると展開して週コマ数を編集できます。"
         ),
     )
     guide_cell.font = Font(size=10, italic=True, color="FF5B6472")
@@ -463,6 +465,17 @@ def build_workbook(students):
         cell.fill = TOTAL_FILL
         cell.border = BORDER
 
+    # --- 180行のデータ行をグループ化して折りたたむ（Excelのアウトライン機能） ---
+    # タブを開いたときに180行がずらっと表示されると見づらいので、普段は折りたたんで
+    # おき、「合計」行の左の［+］をクリックしたときだけ展開して週コマ数を編集できる
+    # ようにする。以前は非表示にしていたが、それだと入力欄ごと迷子になったため、
+    # 「折りたたみ」なら見た目はすっきりしたまま、入力できる場所も分かりやすい。
+    ws.sheet_properties.outlinePr = Outline(summaryBelow=True, showOutlineSymbols=True)
+    for row in range(data_start_row, data_end_row + 1):
+        ws.row_dimensions[row].outlineLevel = 1
+        ws.row_dimensions[row].hidden = True
+    ws.row_dimensions[total_row].collapsed = True
+
     # --- 列幅 ---
     widths = [6, 14, 8, 6, 12, 11, 9, 8, 10, 12, 14, 22, 16, 62, 20]
     for col, width in enumerate(widths, start=1):
@@ -476,8 +489,9 @@ def build_workbook(students):
     # 月末請求一覧シートは請求書シート・単価表シートの計算元データであると同時に、
     # このツールで人が入力する唯一の値（週コマ数、黄色いセル）を触れる唯一の場所
     # でもあるため、非表示にはしない（以前は180行のスクロールを嫌って非表示にして
-    # いたが、そうすると週コマ数の入力欄ごと迷子になってしまうため、代わりに
-    # ヘッダー行の固定表示・Webサイト側の検索で見やすさを確保する）。
+    # いたが、そうすると週コマ数の入力欄ごと迷子になってしまった）。代わりに180行は
+    # アウトライン機能で折りたたんでおき、開いたときの見た目はすっきりさせつつ、
+    # ワークブックを開いたときに最初に表示されるのは請求書シートにする。
     wb.active = wb.index(invoice_ws)
 
     return wb
