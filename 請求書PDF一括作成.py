@@ -35,7 +35,10 @@ def safe_filename(name):
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    excel = win32.Dispatch("Excel.Application")
+    # DispatchEx で必ず新しいExcelプロセスを起動する。Dispatch だと既に起動中の
+    # Excel（利用者が別のブックを開いて作業中かもしれない）につながってしまい、
+    # 最後の excel.Quit() でそのブックごと閉じてしまう事故につながるため。
+    excel = win32.DispatchEx("Excel.Application")
     excel.Visible = False
     excel.DisplayAlerts = False
 

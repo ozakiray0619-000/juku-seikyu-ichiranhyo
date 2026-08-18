@@ -5,7 +5,10 @@ openpyxl を使ってダミー生徒180名分の請求データを作成し、
 「一覧表.xlsx」として保存する。
 """
 
+import datetime
+import json
 import random
+import re
 from urllib.parse import quote
 
 from openpyxl import Workbook
@@ -122,6 +125,15 @@ TANKA_TABLE_NAME = "TankaData"
 JUKU_NAME = "さくら学習塾"
 SITE_URL = "https://ozakiray0619-000.github.io/juku-seikyu-ichiranhyo/"
 
+# 対象年月（このスクリプトを実行した月分の請求として生成する。ダミーデータなので
+# 固定文言にしたい場合はここを直接書き換えてもよい）。
+_TODAY = datetime.date.today()
+BILLING_PERIOD = f"{_TODAY.year}年{_TODAY.month}月分"
+
+# 振込先・支払期日（ダミーデータ。実運用では実際の口座情報に差し替える）。
+BANK_INFO = "〇〇銀行 〇〇支店　普通　1234567　口座名義：サクラガクシュウジュク"
+PAYMENT_DUE_DAYS = 14  # 発行日から何日以内に振込むか
+
 TOTAL_FILL = PatternFill(start_color="FFFFF2CC", end_color="FFFFF2CC", fill_type="solid")
 SUMMARY_FILL = PatternFill(start_color="FFD9E1F2", end_color="FFD9E1F2", fill_type="solid")
 THIN = Side(style="thin", color="FFB0B0B0")
@@ -157,19 +169,22 @@ def build_gmail_url_formula(
     # 件名は短くしておく（塾名まで入れるとURLエンコード後に長くなり、
     # HYPERLINK関数の255文字制限を超えて#VALUE!エラーになりやすいため）。
     # 塾名は本文の書き出しに入っているので、件名では省略しても問題ない。
-    subject_formula = f'{name_expr} & "様 月末請求のお知らせ"'
+    subject_formula = f'{name_expr} & "様 {BILLING_PERIOD}請求のお知らせ"'
+    tax_formula = f'ROUND(({tuition_expr}+{material_expr})*0.1,0)'
     body_formula = (
         f'{name_expr}&"様"&CHAR(10)&CHAR(10)&'
         f'"いつもお世話になっております。{JUKU_NAME}です。"&CHAR(10)&'
-        f'"今月分の請求内容は以下の通りです。"&CHAR(10)&CHAR(10)&'
+        f'"{BILLING_PERIOD}の請求内容は以下の通りです。"&CHAR(10)&CHAR(10)&'
         f'"教室：　"&{classroom_expr}&CHAR(10)&'
         f'"コース：　"&{course_expr}&CHAR(10)&'
         f'"コマ数：　"&{lessons_expr}&"コマ"&CHAR(10)&'
         f'"授業料：　"&TEXT({tuition_expr},"#,##0")&"円"&CHAR(10)&'
         f'"教材費：　"&TEXT({material_expr},"#,##0")&"円"&CHAR(10)&'
-        f'"消費税：　"&TEXT(ROUND({material_expr}*0.1,0),"#,##0")&"円"&CHAR(10)&'
+        f'"消費税：　"&TEXT({tax_formula},"#,##0")&"円"&CHAR(10)&'
         f'"----------------"&CHAR(10)&'
         f'"ご請求額：　"&TEXT({invoice_expr},"#,##0")&"円"&CHAR(10)&CHAR(10)&'
+        f'"振込先：　{BANK_INFO}"&CHAR(10)&'
+        f'"支払期日：　"&TEXT(TODAY()+{PAYMENT_DUE_DAYS},"yyyy/mm/dd")&CHAR(10)&CHAR(10)&'
         f'"お手数ですが、期日までにお振込みくださいますようお願いいたします。"'
     )
     # 本文まで含めるとURLエンコード後に長くなりすぎ、Excelの HYPERLINK関数の
@@ -195,10 +210,10 @@ def build_gmail_url_static(student):
     unit_price, material_fee = COURSE_PRICE[student["course"]]
     lessons = student["weekly_lessons"] * 4
     tuition = unit_price * lessons
-    tax = round(material_fee * 0.1)
+    tax = round((tuition + material_fee) * 0.1)
     invoice = tuition + material_fee + tax
 
-    subject = f'{student["name"]}様 月末請求のお知らせ'
+    subject = f'{student["name"]}様 {BILLING_PERIOD}請求のお知らせ'
     body = (
         f'教室：{student["classroom"]}／'
         f'コース：{student["course"]}／'
@@ -302,6 +317,20 @@ def build_workbook(students):
         "コマ数・授業料・請求額は自動で計算されます。",
     )
 
+    # --- 請求書シートの生徒選択（No－生徒名）用の見出し（テーブル範囲の外） ---
+    # 生徒名だけだと同姓同名がいた場合に選択が一意に定まらないため、
+    # 一意な No を必ず含んだ形式の値をドロップダウンの選択肢にする。
+    picker_header = ws.cell(row=header_row, column=15, value="選択用(No：生徒名)")
+    picker_header.alignment = Alignment(horizontal="center", vertical="center")
+    picker_header.font = Font(bold=True)
+    add_note(
+        ws,
+        f"{get_column_letter(15)}{header_row}",
+        "🔎 請求書シートの「②生徒名で選択」ドロップダウンの選択肢です。\n"
+        "同姓同名がいても一意に選べるよう、No付きの表記にしています。\n"
+        "このセル自体を直接編集する必要はありません。",
+    )
+
     # --- データ行 ---
     # 列: A=No B=生徒名 C=教室 D=学年 E=コース F=1コマ単価 G=週コマ数
     #     H=コマ数 I=教材費 J=授業料 K=請求額(税込) L=保護者メール
@@ -339,7 +368,7 @@ def build_workbook(students):
         c_invoice = ws.cell(
             row=row,
             column=11,
-            value=f"=J{row}+I{row}+ROUND(I{row}*0.1,0)",
+            value=f"=J{row}+I{row}+ROUND((J{row}+I{row})*0.1,0)",
         )
 
         ws.cell(row=row, column=12, value=student["email"])
@@ -362,11 +391,14 @@ def build_workbook(students):
                 f'="教室："&C{row}&"／コース："&E{row}&"／コマ数："&H{row}&"コマ'
                 f'／授業料："&TEXT(J{row},"#,##0")&"円'
                 f'／教材費："&TEXT(I{row},"#,##0")&"円'
-                f'／消費税："&TEXT(ROUND(I{row}*0.1,0),"#,##0")&"円'
+                f'／消費税："&TEXT(ROUND((J{row}+I{row})*0.1,0),"#,##0")&"円'
                 f'／請求額："&TEXT(K{row},"#,##0")&"円"'
             ),
         )
         content_cell.font = Font(size=10, color="FF3B4453")
+
+        # 請求書シートの生徒選択ドロップダウン用（O列）。No付きなので同姓同名でも一意。
+        ws.cell(row=row, column=15, value=f'=A{row}&"："&B{row}')
 
         for c in (c_unit, c_material, c_tuition, c_invoice):
             c.number_format = MONEY_FORMAT
@@ -432,7 +464,7 @@ def build_workbook(students):
         cell.border = BORDER
 
     # --- 列幅 ---
-    widths = [6, 14, 8, 6, 12, 11, 9, 8, 10, 12, 14, 22, 16, 62]
+    widths = [6, 14, 8, 6, 12, 11, 9, 8, 10, 12, 14, 22, 16, 62, 20]
     for col, width in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(col)].width = width
 
@@ -441,10 +473,11 @@ def build_workbook(students):
 
     invoice_ws = build_invoice_sheet(wb, ws.title, data_start_row, data_end_row)
 
-    # 月末請求一覧シートは請求書シート・単価表シートの計算元データとして必要だが、
-    # 180行もあってタブを開いてもスクロールが大変なので、普段は非表示にしておく。
-    # データはそのまま残るので数式は問題なく動く（右クリック→再表示でいつでも見られる）。
-    ws.sheet_state = "hidden"
+    # 月末請求一覧シートは請求書シート・単価表シートの計算元データであると同時に、
+    # このツールで人が入力する唯一の値（週コマ数、黄色いセル）を触れる唯一の場所
+    # でもあるため、非表示にはしない（以前は180行のスクロールを嫌って非表示にして
+    # いたが、そうすると週コマ数の入力欄ごと迷子になってしまうため、代わりに
+    # ヘッダー行の固定表示・Webサイト側の検索で見やすさを確保する）。
     wb.active = wb.index(invoice_ws)
 
     return wb
@@ -532,16 +565,21 @@ def build_invoice_sheet(wb, main_sheet_name, data_start_row, data_end_row):
     # データ入力規則（ドロップダウン・数値範囲）は、別シートの「テーブルの構造化参照」
     # （例: SeikyuData[生徒名]）を直接読み込めない（Excelの既知の制限）。
     # 必ずプレーンなセル範囲参照（例: 月末請求一覧!$B$4:$B$183）を使う。
-    name_range_ref = f"'{main_sheet_name}'!$B${data_start_row}:$B${data_end_row}"
+    # ②のドロップダウンは生徒名そのものではなく「No：生徒名」列（O列）を参照する。
+    # 生徒名だけを選択肢にすると同姓同名がいた場合にどちらを選んだか区別できず、
+    # 別人の請求内容が表示されてしまうため、必ず一意な No を経由して生徒を特定する。
+    name_range_ref = f"'{main_sheet_name}'!$O${data_start_row}:$O${data_end_row}"
 
     NO_CELL = f"{get_column_letter(PANEL_VALUE_COL)}4"
     NO_CELL_ABS = f"${get_column_letter(PANEL_VALUE_COL)}$4"
     NAME_INPUT_CELL = f"{get_column_letter(PANEL_VALUE_COL)}5"
     NAME_INPUT_ABS = f"${get_column_letter(PANEL_VALUE_COL)}$5"
-    RESOLVED_CELL_ABS = f"${get_column_letter(PANEL_VALUE_COL)}$6"  # No・名前どちらからでも解決される選択中の生徒名
+    RESOLVED_NO_ABS = f"${get_column_letter(PANEL_VALUE_COL)}$6"    # ①②どちらの入力からでも解決される選択中の No（数値）
+    RESOLVED_NAME_ABS = f"${get_column_letter(PANEL_VALUE_COL)}$7"  # 上のNoに対応する生徒名（表示用）
 
     def lookup(header):
-        return f'IFERROR(INDEX({TABLE_NAME}[{header}],MATCH({RESOLVED_CELL_ABS},{TABLE_NAME}[生徒名],0)),"")'
+        # 生徒名ではなく一意な No で引く（同姓同名がいても正しい行を取得できるように）。
+        return f'IFERROR(INDEX({TABLE_NAME}[{header}],MATCH({RESOLVED_NO_ABS},{TABLE_NAME}[No],0)),"")'
 
     # ============================================================
     # 左側：正式な請求書（A〜F列。印刷範囲もここだけに絞る）
@@ -555,7 +593,9 @@ def build_invoice_sheet(wb, main_sheet_name, data_start_row, data_end_row):
     issue_date.number_format = "yyyy/mm/dd"
     ws.merge_cells(start_row=1, start_column=5, end_row=1, end_column=6)
 
-    ws.cell(row=2, column=1, value=JUKU_NAME).font = Font(size=11, color="FF5B6472")
+    ws.cell(
+        row=2, column=1, value=f"{JUKU_NAME}　{BILLING_PERIOD}請求書"
+    ).font = Font(size=11, color="FF5B6472")
 
     ws.cell(row=2, column=4, value="請求書No：").alignment = Alignment(horizontal="right")
     invoice_no_cell = ws.cell(row=2, column=5, value=f"={lookup('No')}")
@@ -565,7 +605,10 @@ def build_invoice_sheet(wb, main_sheet_name, data_start_row, data_end_row):
     recipient_cell = ws.cell(
         row=4,
         column=1,
-        value=f'=IF({RESOLVED_CELL_ABS}="","（右の操作パネルでNoか生徒名を選択してください）",{RESOLVED_CELL_ABS}&"　様")',
+        value=(
+            f'=IF({RESOLVED_NO_ABS}="","（右の操作パネルでNoか生徒名を選択してください）",'
+            f'{RESOLVED_NAME_ABS}&"　様")'
+        ),
     )
     recipient_cell.font = Font(bold=True, size=16, color="FF223757")
     ws.merge_cells(start_row=4, start_column=1, end_row=4, end_column=6)
@@ -584,8 +627,9 @@ def build_invoice_sheet(wb, main_sheet_name, data_start_row, data_end_row):
         ("教材費", lookup("教材費"), MONEY_FORMAT),
         ("授業料", lookup("授業料"), MONEY_FORMAT),
         (
-            "消費税（教材費の10%）",
-            f'IFERROR(ROUND(INDEX({TABLE_NAME}[教材費],MATCH({RESOLVED_CELL_ABS},{TABLE_NAME}[生徒名],0))*0.1,0),"")',
+            "消費税（授業料＋教材費の10%）",
+            f'IFERROR(ROUND((INDEX({TABLE_NAME}[授業料],MATCH({RESOLVED_NO_ABS},{TABLE_NAME}[No],0))+'
+            f'INDEX({TABLE_NAME}[教材費],MATCH({RESOLVED_NO_ABS},{TABLE_NAME}[No],0)))*0.1,0),"")',
             MONEY_FORMAT,
         ),
         ("ご請求額（税込）", lookup("請求額(税込)"), MONEY_FORMAT),
@@ -612,14 +656,27 @@ def build_invoice_sheet(wb, main_sheet_name, data_start_row, data_end_row):
     total_row_ref = start_row + len(detail_rows) - 1  # ご請求額の行
 
     footer_row = total_row_ref + 2
+    ws.cell(row=footer_row, column=1, value="振込先：").font = Font(size=10, bold=True)
+    bank_cell = ws.cell(row=footer_row, column=2, value=BANK_INFO)
+    bank_cell.font = Font(size=10)
+    ws.merge_cells(start_row=footer_row, start_column=2, end_row=footer_row, end_column=6)
+
+    due_row = footer_row + 1
+    ws.cell(row=due_row, column=1, value="支払期日：").font = Font(size=10, bold=True)
+    due_cell = ws.cell(row=due_row, column=2, value=f"=TODAY()+{PAYMENT_DUE_DAYS}")
+    due_cell.number_format = "yyyy/mm/dd"
+    due_cell.font = Font(size=10)
+    ws.merge_cells(start_row=due_row, start_column=2, end_row=due_row, end_column=6)
+
+    thanks_row = due_row + 1
     ws.cell(
-        row=footer_row,
+        row=thanks_row,
         column=1,
         value="お手数ですが、期日までにお振込みくださいますようお願いいたします。",
     ).font = Font(size=10)
-    ws.merge_cells(start_row=footer_row, start_column=1, end_row=footer_row, end_column=6)
+    ws.merge_cells(start_row=thanks_row, start_column=1, end_row=thanks_row, end_column=6)
 
-    close_row = footer_row + 2
+    close_row = thanks_row + 2
     ws.cell(row=close_row, column=1, value="以上").font = Font(size=10)
     ws.cell(row=close_row, column=4, value="発行者：").alignment = Alignment(horizontal="right")
     ws.cell(row=close_row, column=5, value=JUKU_NAME)
@@ -659,8 +716,8 @@ def build_invoice_sheet(wb, main_sheet_name, data_start_row, data_end_row):
     test_link_cell.font = Font(bold=True, color="FF1155CC", underline="single")
     ws.merge_cells(start_row=3, start_column=PL, end_row=3, end_column=PV + 1)
 
-    # --- 全生徒を検索できるWebページへのリンク（月末請求一覧シートは非表示にしたため、
-    # 一覧をパッと確認したいときはこちらから） ---
+    # --- 全生徒を検索できるWebページへのリンク（月末請求一覧シートを開かなくても
+    # ブラウザでパッと検索・絞り込みしたいときはこちらから） ---
     SITE_COL = PV + 4  # N列
     site_header = ws.cell(row=1, column=SITE_COL, value="🔍 生徒を探すときは")
     site_header.font = Font(bold=True, size=10, color="FF5B6472")
@@ -719,7 +776,8 @@ def build_invoice_sheet(wb, main_sheet_name, data_start_row, data_end_row):
     add_note(
         ws,
         NAME_INPUT_CELL,
-        "✏ セルをクリックすると▼が出るので、一覧表の生徒名を選んでください。",
+        "✏ セルをクリックすると▼が出るので、「No：生徒名」の形式から選んでください。\n"
+        "同姓同名がいてもNo付きなので取り違えずに選べます。",
     )
 
     dv_name = DataValidation(
@@ -728,30 +786,37 @@ def build_invoice_sheet(wb, main_sheet_name, data_start_row, data_end_row):
         allow_blank=True,
         showErrorMessage=True,
         errorTitle="入力エラー",
-        error="一覧表にある生徒名から選択してください。",
+        error="一覧表にある「No：生徒名」から選択してください。",
     )
     ws.add_data_validation(dv_name)
     dv_name.add(NAME_INPUT_CELL)
 
     # --- 選択中の生徒（①②どちらの入力からでも解決） ---
-    ws.cell(row=6, column=PL, value="選択中の生徒").font = Font(bold=True)
-    resolved_cell = ws.cell(
+    # No（数値）で解決してから生徒名を引く。生徒名を直接キーにすると同姓同名の
+    # 場合に別人の行にマッチしてしまうため、必ずNoを経由する。
+    ws.cell(row=6, column=PL, value="選択中のNo").font = Font(bold=True)
+    resolved_no_cell = ws.cell(
         row=6,
         column=PV,
         value=(
             f'=IF({NO_CELL_ABS}<>"",'
-            f'IFERROR(INDEX({TABLE_NAME}[生徒名],MATCH({NO_CELL_ABS},{TABLE_NAME}[No],0)),'
-            f'"⚠ 該当するNoがありません"),'
-            f'IF({NAME_INPUT_ABS}<>"",{NAME_INPUT_ABS},""))'
+            f'IF(COUNTIF({TABLE_NAME}[No],{NO_CELL_ABS})=0,"⚠ 該当するNoがありません",{NO_CELL_ABS}),'
+            f'IF({NAME_INPUT_ABS}<>"",'
+            f'VALUE(LEFT({NAME_INPUT_ABS},FIND("：",{NAME_INPUT_ABS})-1)),""))'
         ),
     )
-    resolved_cell.font = Font(bold=True, size=13, color="FF223757")
+    resolved_no_cell.font = Font(bold=True, size=13, color="FF223757")
     ws.merge_cells(start_row=6, start_column=PV, end_row=6, end_column=PV + 2)
+
+    ws.cell(row=7, column=PL, value="選択中の生徒名").font = Font(bold=True)
+    resolved_name_cell = ws.cell(row=7, column=PV, value=f"={lookup('生徒名')}")
+    resolved_name_cell.font = Font(bold=True, size=13, color="FF223757")
+    ws.merge_cells(start_row=7, start_column=PV, end_row=7, end_column=PV + 2)
 
     # --- メール本文（件名・本文の元になる文面。件名行にも本文コピー行にも使い回す） ---
     subject_formula, body_core_formula, _ = build_gmail_url_formula(
         email_expr=lookup("保護者メール"),
-        name_expr=RESOLVED_CELL_ABS,
+        name_expr=RESOLVED_NAME_ABS,
         classroom_expr=lookup("教室"),
         course_expr=lookup("コース"),
         lessons_expr=lookup("コマ数"),
@@ -760,11 +825,11 @@ def build_invoice_sheet(wb, main_sheet_name, data_start_row, data_end_row):
         invoice_expr=lookup("請求額(税込)"),
     )
     body_formula = (
-        f'IF({RESOLVED_CELL_ABS}="","生徒名を選択すると本文が生成されます。",{body_core_formula})'
+        f'IF({RESOLVED_NO_ABS}="","生徒名を選択すると本文が生成されます。",{body_core_formula})'
     )
 
     # --- メール送信 ---
-    email_row = 8
+    email_row = 9
     ws.cell(row=email_row - 1, column=PL, value="メールで送る").font = Font(bold=True, size=12)
 
     ws.cell(row=email_row, column=PL, value="宛先（保護者メール）")
@@ -786,7 +851,7 @@ def build_invoice_sheet(wb, main_sheet_name, data_start_row, data_end_row):
         f'_xlfn.ENCODEURL({lookup("保護者メール")}) & "&su=" & _xlfn.ENCODEURL({subject_formula})'
     )
     gmail_link_formula = (
-        f'IF({RESOLVED_CELL_ABS}="","",'
+        f'IF({RESOLVED_NO_ABS}="","",'
         f'HYPERLINK({gmail_url_formula},"📧 Gmail作成画面を開く（宛先・件名 入力済み）"))'
     )
     link_row = subject_row + 1
@@ -826,7 +891,7 @@ def build_invoice_sheet(wb, main_sheet_name, data_start_row, data_end_row):
 
     # --- 列幅 ---
     widths = {
-        "A": 20, "B": 3, "C": 14, "D": 14, "E": 14, "F": 14, "G": 4,
+        "A": 27, "B": 3, "C": 14, "D": 14, "E": 14, "F": 14, "G": 4,
         "H": 22, "I": 2, "J": 16, "K": 16, "L": 16, "M": 3, "N": 20, "O": 12, "P": 12,
     }
     for col, width in widths.items():
@@ -835,12 +900,73 @@ def build_invoice_sheet(wb, main_sheet_name, data_start_row, data_end_row):
     return ws
 
 
+def compute_invoice_rows(students):
+    """一覧表.xlsxの各行と同じ計算ロジックで、Web用の集計データを作る。
+
+    xlsx側の数式（=授業料+教材費+ROUND((授業料+教材費)*0.1,0)）と必ず一致させる
+    ため、単価・税計算のロジックはここでも同じ式を使う。
+    """
+    rows = []
+    sum_by_classroom = {}
+    total_invoice = 0
+    for i, student in enumerate(students, start=1):
+        unit_price, material_fee = COURSE_PRICE[student["course"]]
+        lessons = student["weekly_lessons"] * 4
+        tuition = unit_price * lessons
+        tax = round((tuition + material_fee) * 0.1)
+        invoice = tuition + material_fee + tax
+        rows.append(
+            [
+                i, student["name"], student["classroom"], student["grade"], student["course"],
+                unit_price, student["weekly_lessons"], lessons, material_fee, tuition, invoice,
+            ]
+        )
+        sum_by_classroom[student["classroom"]] = (
+            sum_by_classroom.get(student["classroom"], 0) + invoice
+        )
+        total_invoice += invoice
+    return rows, sum_by_classroom, total_invoice
+
+
+def update_site_data(students, html_path="index.html"):
+    """index.html に埋め込まれたプレビュー用データ(DATA)を、一覧表.xlsxと同じ
+    生成元データ・同じ計算ロジックから作り直す。
+
+    以前は手作業でこのDATAを更新しており、xlsxとサイトの内容がずれるバグが
+    実際に起きたため、一覧表.py実行のたびに必ず自動で同期する。
+    """
+    rows, sum_by_classroom, total_invoice = compute_invoice_rows(students)
+    data_json = json.dumps(
+        {"rows": rows, "sum_by_classroom": sum_by_classroom, "total_invoice": total_invoice},
+        ensure_ascii=False,
+    )
+
+    with open(html_path, "r", encoding="utf-8") as f:
+        html = f.read()
+
+    new_html, n = re.subn(
+        r"const DATA = \{.*?\};",
+        lambda _match: f"const DATA = {data_json};",
+        html,
+        count=1,
+        flags=re.DOTALL,
+    )
+    if n == 0:
+        raise RuntimeError(f"{html_path} 内に `const DATA = ...;` が見つかりませんでした。")
+
+    with open(html_path, "w", encoding="utf-8") as f:
+        f.write(new_html)
+
+
 def main():
     students = build_students()
     wb = build_workbook(students)
     output_path = "一覧表.xlsx"
     wb.save(output_path)
     print(f"生徒{len(students)}名分の月末請求一覧表を作成しました: {output_path}")
+
+    update_site_data(students)
+    print("index.html の埋め込みデータを一覧表.xlsxと同じ内容に同期しました。")
 
 
 if __name__ == "__main__":
